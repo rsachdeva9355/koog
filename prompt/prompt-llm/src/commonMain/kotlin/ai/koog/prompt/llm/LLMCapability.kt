@@ -228,5 +228,16 @@ public sealed class LLMCapability(public val id: String) {
         @Serializable
         @Experimental
         public data object Responses : OpenAIEndpoint("openai-endpoint-responses")
+
+        /**
+         * Represents the Realtime API endpoint capability for an OpenAI-based LLM.
+         *
+         * This capability identifies models that support the OpenAI Realtime API,
+         * which uses WebSocket connections for low-latency text and tool interactions.
+         * https://platform.openai.com/docs/guides/realtime
+         */
+        @Serializable
+        @Experimental
+        public data object Realtime : OpenAIEndpoint("openai-endpoint-realtime")
     }
 }

@@ -46,6 +46,8 @@ import kotlin.jvm.JvmField
  * | [Embeddings.TextEmbedding3Large] | Slow      | $0.13              | Text                         | Text                         |
  * | [Embeddings.TextEmbeddingAda002] | Slow      | $0.1               | Text                         | Text                         |
  * | [Moderation.Omni]                | Medium    | $4.40              | Text                         | Moderation Result            |
+ * | [Realtime.GPT4oRealtimePreview]  | Fast      | $5-$20             | Text, Tools                  | Text, Tools (WebSocket)      |
+ * | [Realtime.GPT4oMiniRealtimePreview] | Fast   | $0.6-$2.4          | Text, Tools                  | Text, Tools (WebSocket)      |
  */
 public object OpenAIModels : LLModelDefinitions {
     private val reasoningCapabilities: List<LLMCapability> = listOf(LLMCapability.Thinking)
@@ -986,6 +988,63 @@ public object OpenAIModels : LLModelDefinitions {
     }
 
     /**
+     * Object containing Realtime API models for low-latency WebSocket-based conversations.
+     * These models connect via the OpenAI Realtime API and support text and tool interactions.
+     *
+     * @see <a href="https://platform.openai.com/docs/guides/realtime">Realtime API</a>
+     */
+    public object Realtime {
+
+        /**
+         * GPT-4o Realtime Preview — low-latency WebSocket model for real-time text and tool interactions.
+         *
+         * 128,000 context window
+         * 4,096 max output tokens
+         *
+         * @see <a href="https://platform.openai.com/docs/guides/realtime">Realtime API</a>
+         */
+        @JvmField
+        public val GPT4oRealtimePreview: LLModel = LLModel(
+            provider = LLMProvider.OpenAI,
+            id = "gpt-4o-realtime-preview",
+            capabilities = listOf(
+                LLMCapability.Temperature,
+                LLMCapability.Tools,
+                LLMCapability.ToolChoice,
+                LLMCapability.Audio,
+                LLMCapability.Completion,
+                LLMCapability.OpenAIEndpoint.Realtime,
+            ),
+            contextLength = 128_000,
+            maxOutputTokens = 4_096,
+        )
+
+        /**
+         * GPT-4o Mini Realtime Preview — smaller, faster, cost-effective variant for real-time interactions.
+         *
+         * 128,000 context window
+         * 4,096 max output tokens
+         *
+         * @see <a href="https://platform.openai.com/docs/guides/realtime">Realtime API</a>
+         */
+        @JvmField
+        public val GPT4oMiniRealtimePreview: LLModel = LLModel(
+            provider = LLMProvider.OpenAI,
+            id = "gpt-4o-mini-realtime-preview",
+            capabilities = listOf(
+                LLMCapability.Temperature,
+                LLMCapability.Tools,
+                LLMCapability.ToolChoice,
+                LLMCapability.Audio,
+                LLMCapability.Completion,
+                LLMCapability.OpenAIEndpoint.Realtime,
+            ),
+            contextLength = 128_000,
+            maxOutputTokens = 4_096,
+        )
+    }
+
+    /**
      * List of the supported models by the OpenAI provider.
      */
     private val supportedModels: List<LLModel>
@@ -1041,6 +1100,10 @@ public object OpenAIModels : LLModelDefinitions {
 
             // Moderation Models
             Moderation.Omni,
+
+            // Realtime Models
+            Realtime.GPT4oRealtimePreview,
+            Realtime.GPT4oMiniRealtimePreview,
         )
 
     /**
