@@ -50,6 +50,8 @@ private val logger = KotlinLogging.logger {}
  * ### Supported features
  * - Text responses streamed as [StreamFrame.TextDelta] / [StreamFrame.TextComplete]
  * - Function/tool calls streamed as [StreamFrame.ToolCallDelta] / [StreamFrame.ToolCallComplete]
+ * - Reasoning streamed as [StreamFrame.ReasoningDelta] / [StreamFrame.ReasoningComplete]
+ *   (reasoning models via WebSocket mode, e.g. o3, o4-mini)
  * - System instructions via [Message.System] (mapped to Realtime session `instructions`)
  * - Multi-turn conversations (each `execute` call opens its own WebSocket session)
  *
@@ -172,6 +174,9 @@ public class OpenAIRealtimeClient @JvmOverloads constructor(
                 // ---- 4. Stream response events ----------------------------------
                 // Maps call_id -> function name, populated when response.output_item.added arrives.
                 val functionCallNames = mutableMapOf<String, String>()
+                // Accumulated reasoning text per outputIndex, for ReasoningComplete construction.
+                val reasoningText = mutableMapOf<Int, MutableList<String>>()
+                val reasoningSummary = mutableMapOf<Int, MutableList<String>>()
 
                 try {
                     for (frame in incoming) {
@@ -202,11 +207,51 @@ public class OpenAIRealtimeClient @JvmOverloads constructor(
                                 }
                             }
 
+                            // Realtime API text events (gpt-4o-realtime-preview)
                             is RealtimeResponseTextDeltaEvent ->
                                 send(StreamFrame.TextDelta(event.delta, event.outputIndex))
 
                             is RealtimeResponseTextDoneEvent ->
                                 send(StreamFrame.TextComplete(event.text, event.outputIndex))
+
+                            // Responses-API-compatible text events (reasoning models via WebSocket mode)
+                            is RealtimeResponseOutputTextDeltaEvent ->
+                                send(StreamFrame.TextDelta(event.delta, event.outputIndex))
+
+                            is RealtimeResponseOutputTextDoneEvent ->
+                                send(StreamFrame.TextComplete(event.text, event.outputIndex))
+
+                            // Reasoning events — emitted by reasoning models (o3, o4-mini, etc.)
+                            is RealtimeResponseReasoningTextDeltaEvent -> {
+                                reasoningText.getOrPut(event.outputIndex) { mutableListOf() }
+                                    .add(event.delta)
+                                send(StreamFrame.ReasoningDelta(text = event.delta, index = event.outputIndex))
+                            }
+
+                            is RealtimeResponseReasoningSummaryTextDeltaEvent -> {
+                                reasoningSummary.getOrPut(event.outputIndex) { mutableListOf() }
+                                    .add(event.delta)
+                                send(StreamFrame.ReasoningDelta(summary = event.delta, index = event.outputIndex))
+                            }
+
+                            is RealtimeResponseOutputItemDoneEvent -> {
+                                val item = event.item
+                                if (item.type == "reasoning") {
+                                    val idx = event.outputIndex
+                                    // Prefer summary text from the done payload (already aggregated by API);
+                                    // fall back to what we accumulated from delta events.
+                                    val summaryTexts = item.summary?.map { it.text }
+                                        ?: reasoningSummary[idx]
+                                    send(
+                                        StreamFrame.ReasoningComplete(
+                                            text = reasoningText[idx] ?: emptyList(),
+                                            summary = summaryTexts,
+                                            encrypted = item.encryptedContent,
+                                            index = idx,
+                                        )
+                                    )
+                                }
+                            }
 
                             is RealtimeResponseFunctionCallArgumentsDeltaEvent ->
                                 send(
@@ -309,10 +354,23 @@ public class OpenAIRealtimeClient @JvmOverloads constructor(
                     json.decodeFromJsonElement<RealtimeSessionUpdatedEvent>(element)
                 "response.output_item.added" ->
                     json.decodeFromJsonElement<RealtimeResponseOutputItemAddedEvent>(element)
+                "response.output_item.done" ->
+                    json.decodeFromJsonElement<RealtimeResponseOutputItemDoneEvent>(element)
+                // Realtime API text events (gpt-4o-realtime-preview)
                 "response.text.delta" ->
                     json.decodeFromJsonElement<RealtimeResponseTextDeltaEvent>(element)
                 "response.text.done" ->
                     json.decodeFromJsonElement<RealtimeResponseTextDoneEvent>(element)
+                // Responses-API-compatible text events (reasoning models via WebSocket mode)
+                "response.output_text.delta" ->
+                    json.decodeFromJsonElement<RealtimeResponseOutputTextDeltaEvent>(element)
+                "response.output_text.done" ->
+                    json.decodeFromJsonElement<RealtimeResponseOutputTextDoneEvent>(element)
+                // Reasoning events
+                "response.reasoning_text.delta" ->
+                    json.decodeFromJsonElement<RealtimeResponseReasoningTextDeltaEvent>(element)
+                "response.reasoning_summary_text.delta" ->
+                    json.decodeFromJsonElement<RealtimeResponseReasoningSummaryTextDeltaEvent>(element)
                 "response.function_call_arguments.delta" ->
                     json.decodeFromJsonElement<RealtimeResponseFunctionCallArgumentsDeltaEvent>(element)
                 "response.function_call_arguments.done" ->
@@ -358,7 +416,11 @@ public class OpenAIRealtimeClient @JvmOverloads constructor(
             output = content,
         )
 
-        is Message.Reasoning -> null // Not applicable in text-only Realtime mode
+        is Message.Reasoning -> RealtimeReasoningItem(
+            id = id,
+            encryptedContent = encrypted,
+            summary = summary?.map { RealtimeReasoningSummary(text = it.text) },
+        )
     }
 
     /** Converts a [ToolDescriptor] to a [RealtimeFunctionTool] for session configuration. */
@@ -444,4 +506,54 @@ internal data class RealtimeResponseDoneEvent(
 internal data class RealtimeErrorEvent(
     @kotlinx.serialization.SerialName("event_id") val eventId: String? = null,
     val error: RealtimeError,
+)
+
+// ---- Responses-API-compatible events (WebSocket mode for reasoning models) ----
+
+/** Text output delta — Responses API event name (reasoning models via WebSocket mode). */
+@kotlinx.serialization.Serializable
+internal data class RealtimeResponseOutputTextDeltaEvent(
+    @kotlinx.serialization.SerialName("event_id") val eventId: String? = null,
+    @kotlinx.serialization.SerialName("item_id") val itemId: String? = null,
+    @kotlinx.serialization.SerialName("output_index") val outputIndex: Int,
+    val delta: String,
+)
+
+/** Text output complete — Responses API event name (reasoning models via WebSocket mode). */
+@kotlinx.serialization.Serializable
+internal data class RealtimeResponseOutputTextDoneEvent(
+    @kotlinx.serialization.SerialName("event_id") val eventId: String? = null,
+    @kotlinx.serialization.SerialName("item_id") val itemId: String? = null,
+    @kotlinx.serialization.SerialName("output_index") val outputIndex: Int,
+    val text: String,
+)
+
+/** Reasoning text delta — emitted by reasoning models during the thinking phase. */
+@kotlinx.serialization.Serializable
+internal data class RealtimeResponseReasoningTextDeltaEvent(
+    @kotlinx.serialization.SerialName("event_id") val eventId: String? = null,
+    @kotlinx.serialization.SerialName("item_id") val itemId: String? = null,
+    @kotlinx.serialization.SerialName("output_index") val outputIndex: Int,
+    val delta: String,
+)
+
+/** Reasoning summary text delta — emitted when `reasoning.summary` is requested. */
+@kotlinx.serialization.Serializable
+internal data class RealtimeResponseReasoningSummaryTextDeltaEvent(
+    @kotlinx.serialization.SerialName("event_id") val eventId: String? = null,
+    @kotlinx.serialization.SerialName("item_id") val itemId: String? = null,
+    @kotlinx.serialization.SerialName("output_index") val outputIndex: Int,
+    val delta: String,
+)
+
+/**
+ * Output item completed — carries the full item payload including encrypted reasoning content.
+ * Emitted by Responses-API-compatible streaming (reasoning models via WebSocket mode).
+ */
+@kotlinx.serialization.Serializable
+internal data class RealtimeResponseOutputItemDoneEvent(
+    @kotlinx.serialization.SerialName("event_id") val eventId: String? = null,
+    @kotlinx.serialization.SerialName("response_id") val responseId: String? = null,
+    @kotlinx.serialization.SerialName("output_index") val outputIndex: Int,
+    val item: RealtimeOutputItemDonePayload,
 )

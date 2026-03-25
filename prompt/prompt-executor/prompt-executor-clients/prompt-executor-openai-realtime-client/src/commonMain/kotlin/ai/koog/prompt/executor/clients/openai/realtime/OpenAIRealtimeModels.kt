@@ -89,6 +89,29 @@ internal data class RealtimeFunctionCallOutputItem(
     override val status: String? = null,
 ) : RealtimeItem()
 
+/**
+ * A reasoning item produced by a reasoning-capable model.
+ * Pass this back in subsequent turns using [encryptedContent] to preserve multi-turn context.
+ */
+@Serializable
+@SerialName("reasoning")
+internal data class RealtimeReasoningItem(
+    override val id: String? = null,
+    /** Encrypted representation of the reasoning tokens — required for stateless multi-turn conversations. */
+    @SerialName("encrypted_content")
+    val encryptedContent: String? = null,
+    /** Optional summary parts produced alongside the reasoning. */
+    val summary: List<RealtimeReasoningSummary>? = null,
+    override val status: String? = null,
+) : RealtimeItem()
+
+/** A single summary-text part inside a [RealtimeReasoningItem]. */
+@Serializable
+internal data class RealtimeReasoningSummary(
+    val type: String = "summary_text",
+    val text: String,
+)
+
 // ===== Content Parts =====
 
 /** A content part within a conversation item. */
@@ -169,6 +192,21 @@ internal data class RealtimeOutputItemInfo(
     @SerialName("call_id")
     val callId: String? = null,
     val status: String? = null,
+)
+
+/**
+ * Full item payload carried by `response.output_item.done`.
+ * Used to construct [ai.koog.prompt.streaming.StreamFrame.ReasoningComplete] for reasoning items.
+ */
+@Serializable
+internal data class RealtimeOutputItemDonePayload(
+    val id: String? = null,
+    val type: String,
+    /** Encrypted reasoning tokens — only present for `type == "reasoning"` and when requested. */
+    @SerialName("encrypted_content")
+    val encryptedContent: String? = null,
+    /** Summary parts — only present for `type == "reasoning"`. */
+    val summary: List<RealtimeReasoningSummary>? = null,
 )
 
 /** Response result payload inside [RealtimeResponseDoneEvent]. */
